@@ -1,0 +1,11 @@
+# Single-page-app fallback for React Router (Apache / Hostinger).
+# Real files and the /api folder are served normally; everything else goes to index.html.
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteBase /
+    RewriteRule ^index\.html$ - [L]
+    RewriteCond %{REQUEST_URI} !^/api/
+    RewriteCond %{REQUEST_FILENAME} !-f
+    RewriteCond %{REQUEST_FILENAME} !-d
+    RewriteRule . /index.html [L]
+</IfModule>
