@@ -3,12 +3,15 @@ import { createContext, createElement, useCallback, useContext, useEffect, useMe
 const STORAGE_KEY = 'tt_theme';
 const ThemeContext = createContext(null);
 
+/** Saved choice first; otherwise follow the device setting (light or dark). */
 function readInitial() {
   try {
-    return localStorage.getItem(STORAGE_KEY) === 'light' ? 'light' : 'dark';
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (saved === 'light' || saved === 'dark') return saved;
   } catch {
-    return 'dark';
+    // Storage blocked: fall through to the device setting.
   }
+  return window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
 }
 
 export function ThemeProvider({ children }) {
@@ -19,15 +22,30 @@ export function ThemeProvider({ children }) {
     document.documentElement.classList.toggle('dark', isDark);
     const meta = document.querySelector('meta[name="theme-color"]');
     if (meta) meta.setAttribute('content', isDark ? '#0b0f1a' : '#f4f6fa');
+  }, [theme]);
+
+  // Only an explicit choice is saved, so people who never touch the toggle keep following their device.
+  const remember = (value) => {
     try {
-      localStorage.setItem(STORAGE_KEY, theme);
+      localStorage.setItem(STORAGE_KEY, value);
     } catch {
       // Persisting the theme is a nicety; ignore blocked storage.
     }
-  }, [theme]);
-
-  const setTheme = useCallback((next) => setThemeState(next === 'light' ? 'light' : 'dark'), []);
-  const toggle = useCallback(() => setThemeState((t) => (t === 'dark' ? 'light' : 'dark')), []);
+  };
+  const setTheme = useCallback((next) => {
+    const value = next === 'light' ? 'light' : 'dark';
+    remember(value);
+    setThemeState(value);
+  }, []);
+  const toggle = useCallback(
+    () =>
+      setThemeState((t) => {
+        const value = t === 'dark' ? 'light' : 'dark';
+        remember(value);
+        return value;
+      }),
+    []
+  );
   const value = useMemo(() => ({ theme, setTheme, toggle }), [theme, setTheme, toggle]);
 
   return createElement(ThemeContext.Provider, { value }, children);

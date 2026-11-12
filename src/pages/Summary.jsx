@@ -10,6 +10,8 @@ import { IconCheck, IconChevronDown, IconCopy, IconSpinner } from '../components
 import { useToast } from '../components/Toast.jsx';
 import { generateSummary, getMessages, getSummary } from '../lib/api.js';
 import { getToken } from '../lib/sessions.js';
+import { getAuthToken } from '../lib/auth.js';
+import { useAuth } from '../hooks/useAuth.jsx';
 import { LIVE_STATUSES, friendlyError } from '../lib/format.js';
 
 const LIST_SECTIONS = [
@@ -181,7 +183,8 @@ function Transcript({ id }) {
 function SummaryView({ id }) {
   const toast = useToast();
   const navigate = useNavigate();
-  const hasToken = Boolean(getToken(id));
+  const { isLoggedIn } = useAuth();
+  const hasToken = Boolean(getToken(id) || getAuthToken());
   const [state, setState] = useState({ loading: hasToken, error: '', code: hasToken ? '' : 'no_access', data: null });
   const [generating, setGenerating] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -256,7 +259,16 @@ function SummaryView({ id }) {
     body = <SummarySkeleton />;
   } else if (state.code === 'no_access' || state.code === 'not_found') {
     body = (
-      <ErrorState tone="muted" title="You don't have access to this discussion" message="It was not started from this browser, or it no longer exists.">
+      <ErrorState
+        tone="muted"
+        title="You don't have access to this discussion"
+        message={isLoggedIn ? 'It belongs to another account, or it no longer exists.' : 'It was started on another device or belongs to an account. If it is yours, log in to open it.'}
+      >
+        {!isLoggedIn && (
+          <Link to={`/login?next=${encodeURIComponent(`/summary/${id}`)}`} className="rounded-xl border border-line px-4 py-2.5 text-sm font-semibold text-fg transition hover:bg-surface-2">
+            Log in
+          </Link>
+        )}
         {homeLink}
       </ErrorState>
     );
@@ -302,14 +314,14 @@ function SummaryView({ id }) {
             <section className="animate-fade-up rounded-2xl border border-alpha/30 bg-alpha/5 p-5">
               <div className="mb-3 flex items-center gap-2.5">
                 <Avatar who="alpha" size={28} />
-                <h2 className="text-sm font-semibold uppercase tracking-wide text-alpha">Alpha's strongest arguments</h2>
+                <h2 className="text-sm font-semibold uppercase tracking-wide text-alpha">Alpha&apos;s strongest arguments</h2>
               </div>
               <Prose>{summary.alpha_perspective}</Prose>
             </section>
             <section className="animate-fade-up rounded-2xl border border-beta/30 bg-beta/5 p-5">
               <div className="mb-3 flex items-center gap-2.5">
                 <Avatar who="beta" size={28} />
-                <h2 className="text-sm font-semibold uppercase tracking-wide text-beta">Beta's strongest arguments</h2>
+                <h2 className="text-sm font-semibold uppercase tracking-wide text-beta">Beta&apos;s strongest arguments</h2>
               </div>
               <Prose>{summary.beta_perspective}</Prose>
             </section>

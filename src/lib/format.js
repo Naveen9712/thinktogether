@@ -100,6 +100,11 @@ const ERROR_TEXT = {
   invalid_state: 'That action is not available in the current state of the discussion.',
   not_interruptible: 'There is nothing to interrupt right now.',
   generation_in_progress: 'An AI is still answering. Try again in a moment.',
+  message_limit: 'You have sent the most messages allowed in one discussion.',
+  daily_limit: 'ThinkTogether has reached its limit for today. Please try again tomorrow.',
+  invalid_credentials: 'Wrong username or password.',
+  session_expired: 'Your login session has ended. Please log in again.',
+  auth_required: 'Please log in first.',
   ECONNABORTED: 'The request timed out. Check your connection and retry.',
   ERR_NETWORK: 'Cannot reach the server. Check your connection.',
 };

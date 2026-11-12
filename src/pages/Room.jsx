@@ -11,6 +11,7 @@ import Avatar from '../components/Avatar.jsx';
 import { MessageSkeletons } from '../components/Skeleton.jsx';
 import { IconAlert, IconArrowDown, IconWifiOff } from '../components/Icons.jsx';
 import { AGENTS } from '../lib/format.js';
+import { useAuth } from '../hooks/useAuth.jsx';
 
 const NEAR_BOTTOM_PX = 120;
 
@@ -60,8 +61,44 @@ function FinishedBanner({ discussion, id }) {
   );
 }
 
+/** Screen-reader announcement of each finished message (the visual list itself is not a live region). */
+function LiveAnnouncer({ messages }) {
+  const last = [...messages].reverse().find((m) => m.generation_status !== 'generating' && m.speaker !== 'user');
+  const name = last ? (AGENTS[last.speaker] ? AGENTS[last.speaker].name : '') : '';
+  const text = last ? `${name}: ${last.message.slice(0, 600)}` : '';
+  return (
+    <div className="sr-only" aria-live="polite" aria-atomic="true">
+      {text}
+    </div>
+  );
+}
+
+function NoAccess({ id, isLoggedIn }) {
+  return (
+    <ErrorState
+      tone="muted"
+      title="You don't have access to this discussion"
+      message={
+        isLoggedIn
+          ? 'It belongs to another account, or it no longer exists.'
+          : 'It was started on another device or belongs to an account. If it is yours, log in to open it.'
+      }
+    >
+      {!isLoggedIn && (
+        <Link to={`/login?next=${encodeURIComponent(`/room/${id}`)}`} className="rounded-xl bg-alpha px-4 py-2.5 text-sm font-semibold text-bg transition hover:opacity-90">
+          Log in
+        </Link>
+      )}
+      <Link to="/" className="rounded-xl border border-line px-4 py-2.5 text-sm font-semibold text-fg transition hover:bg-surface-2">
+        Back to home
+      </Link>
+    </ErrorState>
+  );
+}
+
 function RoomView({ id }) {
   const room = useDiscussionRoom(id);
+  const { isLoggedIn } = useAuth();
   const { discussion, messages, clock, fatal, offline, turnError } = room;
   const navigate = useNavigate();
   const atBottomRef = useRef(true);
@@ -102,24 +139,7 @@ function RoomView({ id }) {
     window.scrollTo({ top: document.documentElement.scrollHeight, behavior: 'smooth' });
   }, []);
 
-  if (fatal) {
-    const noAccess = fatal === 'no_access' || fatal === 'not_found';
-    return (
-      <ErrorState
-        tone="muted"
-        title={noAccess ? "You don't have access to this discussion" : 'Could not open this discussion'}
-        message={
-          noAccess
-            ? 'This discussion was not started from this browser, or it no longer exists. Discussions are private to the device that created them.'
-            : 'Something went wrong while loading the room.'
-        }
-      >
-        <Link to="/" className="rounded-xl bg-alpha px-4 py-2.5 text-sm font-semibold text-bg transition hover:opacity-90">
-          Back to home
-        </Link>
-      </ErrorState>
-    );
-  }
+  if (fatal) return <NoAccess id={id} isLoggedIn={isLoggedIn} />;
 
   const streaming = Boolean(last && last.generation_status === 'generating' && last.message.length > 0);
   const finished = discussion && (discussion.status === 'completed' || discussion.status === 'ended');
@@ -139,10 +159,11 @@ function RoomView({ id }) {
       </div>
 
       <main className="mx-auto w-full max-w-3xl flex-1 px-4 py-5">
+        <LiveAnnouncer messages={messages} />
         {!discussion && <MessageSkeletons count={3} />}
         {discussion && messages.length === 0 && <EmptyConversation discussion={discussion} />}
         {messages.length > 0 && (
-          <div className="space-y-4" aria-live="off">
+          <div className="space-y-4">
             {messages.map((m) => (
               <MessageCard key={m.id} message={m} />
             ))}
@@ -172,14 +193,21 @@ function RoomView({ id }) {
             <div className="animate-fade-in rounded-xl border border-danger/30 bg-danger/10 p-3" role="alert">
               <div className="flex items-start gap-2.5">
                 <IconAlert size={16} className="mt-0.5 shrink-0 text-danger" />
-                <p className="min-w-0 flex-1 break-words text-sm text-fg">{turnError.message}</p>
-                <button
-                  type="button"
-                  onClick={room.retry}
-                  className="shrink-0 rounded-lg bg-danger px-3 py-1.5 text-xs font-semibold text-bg transition hover:opacity-90"
-                >
-                  Retry
-                </button>
+                <div className="min-w-0 flex-1">
+                  <p className="break-words text-sm text-fg">{turnError.message}</p>
+                  {!turnError.retryable && (
+                    <p className="mt-1 text-xs text-muted">Retrying will not help here. This needs a fix in the server settings.</p>
+                  )}
+                </div>
+                {turnError.retryable && (
+                  <button
+                    type="button"
+                    onClick={room.retry}
+                    className="shrink-0 rounded-lg bg-danger px-3 py-1.5 text-xs font-semibold text-bg transition hover:opacity-90"
+                  >
+                    Retry
+                  </button>
+                )}
               </div>
             </div>
           )}

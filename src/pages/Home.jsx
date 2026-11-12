@@ -6,6 +6,8 @@ import { IconArrowRight, IconSpinner } from '../components/Icons.jsx';
 import { createDiscussion } from '../lib/api.js';
 import { saveSession } from '../lib/sessions.js';
 import { AGENTS, DEPTHS, friendlyError } from '../lib/format.js';
+import { radioKeyDown } from '../lib/radio.js';
+import { useAuth } from '../hooks/useAuth.jsx';
 
 const SUGGESTIONS = [
   'Is human consciousness more than brain activity?',
@@ -53,8 +55,30 @@ function ThinkerCard({ who }) {
   );
 }
 
+function GuestNote() {
+  return (
+    <div className="mx-auto mt-8 flex max-w-2xl flex-col gap-3 rounded-2xl border border-line bg-surface p-4 text-sm sm:flex-row sm:items-center sm:justify-between">
+      <p className="text-muted">
+        <span className="font-semibold text-fg">You are using ThinkTogether as a guest.</span> Your discussions are saved only on this device. Log in to keep them in your account.
+      </p>
+      <div className="flex shrink-0 gap-2">
+        <Link to="/login" className="rounded-xl border border-line px-3.5 py-2 font-semibold text-fg transition hover:bg-surface-2">
+          Log in
+        </Link>
+        <Link to="/signup" className="rounded-xl bg-alpha px-3.5 py-2 font-semibold text-bg transition hover:opacity-90">
+          Sign up
+        </Link>
+      </div>
+    </div>
+  );
+}
+
+const PRESET_VALUES = [...PRESETS, 'custom'];
+const DEPTH_VALUES = DEPTHS.map((d) => d.value);
+
 export default function Home() {
   const navigate = useNavigate();
+  const { isLoggedIn, user } = useAuth();
   const [topic, setTopic] = useState('');
   const [context, setContext] = useState('');
   const [preset, setPreset] = useState(10);
@@ -95,12 +119,15 @@ export default function Home() {
       };
       if (context.trim()) payload.additional_context = context.trim();
       const res = await createDiscussion(payload);
-      saveSession({
-        id: res.id,
-        token: res.token,
-        topic: payload.topic,
-        created_at: (res.discussion && res.discussion.start_time) || new Date().toISOString(),
-      });
+      // Guests keep the secret token on this device; account discussions need no token.
+      if (!isLoggedIn) {
+        saveSession({
+          id: res.id,
+          token: res.token,
+          topic: payload.topic,
+          created_at: (res.discussion && res.discussion.start_time) || new Date().toISOString(),
+        });
+      }
       navigate(`/room/${res.id}`);
     } catch (err) {
       const fields = err.details && err.details.fields;
@@ -137,6 +164,13 @@ export default function Home() {
             Pick a question and let an analytical thinker and a philosophical thinker explore it together. Interrupt, pause or add your own voice whenever you like.
           </p>
         </section>
+
+        {!isLoggedIn && <GuestNote />}
+        {isLoggedIn && (
+          <p className="mx-auto mt-6 max-w-2xl text-center text-sm text-muted">
+            Hi <span className="font-semibold text-fg">{user.name}</span>, your discussions are saved to your account.
+          </p>
+        )}
 
         <section className="mx-auto mt-8 grid max-w-2xl gap-3 sm:grid-cols-2">
           <ThinkerCard who="alpha" />
@@ -206,13 +240,26 @@ export default function Home() {
             <Label htmlFor="duration-group" hint="Minutes">
               Duration
             </Label>
-            <div id="duration-group" role="radiogroup" aria-label="Discussion duration" className="flex flex-wrap gap-2">
+            <div
+              id="duration-group"
+              role="radiogroup"
+              aria-label="Discussion duration"
+              className="flex flex-wrap gap-2"
+              onKeyDown={(e) => {
+                if (e.target.tagName === 'INPUT') return;
+                radioKeyDown(e, PRESET_VALUES, preset, (v) => {
+                  setPreset(v);
+                  clearError('duration_minutes');
+                });
+              }}
+            >
               {PRESETS.map((m) => (
                 <button
                   key={m}
                   type="button"
                   role="radio"
                   aria-checked={preset === m}
+                  tabIndex={preset === m ? 0 : -1}
                   onClick={() => {
                     setPreset(m);
                     clearError('duration_minutes');
@@ -228,6 +275,7 @@ export default function Home() {
                 type="button"
                 role="radio"
                 aria-checked={isCustom}
+                tabIndex={isCustom ? 0 : -1}
                 onClick={() => setPreset('custom')}
                 className={`h-10 rounded-xl border px-4 text-sm font-semibold transition ${
                   isCustom ? 'border-alpha bg-alpha/15 text-alpha' : 'border-line bg-surface text-muted hover:text-fg'
@@ -259,13 +307,25 @@ export default function Home() {
 
           <div>
             <Label htmlFor="depth-group">Depth of discussion</Label>
-            <div id="depth-group" role="radiogroup" aria-label="Discussion depth" className="grid gap-2.5 sm:grid-cols-3">
+            <div
+              id="depth-group"
+              role="radiogroup"
+              aria-label="Discussion depth"
+              className="grid gap-2.5 sm:grid-cols-3"
+              onKeyDown={(e) =>
+                radioKeyDown(e, DEPTH_VALUES, depth, (v) => {
+                  setDepth(v);
+                  clearError('discussion_depth');
+                })
+              }
+            >
               {DEPTHS.map((d) => (
                 <button
                   key={d.value}
                   type="button"
                   role="radio"
                   aria-checked={depth === d.value}
+                  tabIndex={depth === d.value ? 0 : -1}
                   onClick={() => {
                     setDepth(d.value);
                     clearError('discussion_depth');
@@ -307,11 +367,6 @@ export default function Home() {
           </button>
         </form>
 
-        <footer className="mt-10 text-center text-xs text-muted">
-          <Link to="/setup" className="underline-offset-2 hover:text-fg hover:underline">
-            Setup check
-          </Link>
-        </footer>
       </main>
     </div>
   );

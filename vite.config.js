@@ -8,18 +8,18 @@ export default defineConfig(({ mode }) => {
   const target = env.VITE_DEV_PROXY_TARGET || 'http://localhost';
   const apiPath = env.VITE_DEV_API_PATH || '/thinktogether/api';
 
+  const proxy = {
+    '/api': {
+      target,
+      changeOrigin: true,
+      rewrite: (path) => path.replace(/^\/api/, apiPath),
+    },
+  };
+
   return {
     plugins: [react()],
-    server: {
-      port: 5173,
-      proxy: {
-        '/api': {
-          target,
-          changeOrigin: true,
-          rewrite: (path) => path.replace(/^\/api/, apiPath),
-        },
-      },
-    },
+    server: { port: 5173, proxy },
+    preview: { port: 4173, proxy },
     build: {
       outDir: 'dist',
       sourcemap: false,

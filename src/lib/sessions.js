@@ -1,7 +1,9 @@
-// Discussions this browser created, remembered with their secret access token.
-// Shape: [{ id, token, topic, created_at }], newest first, capped at MAX_SESSIONS.
+// GUEST discussions this browser created, remembered with their secret access token.
+// (Signed-in users' discussions live in their account instead.)
+// Shape: [{ id, token, topic, created_at }], newest first, capped at MAX_SESSIONS
+// (the same number history.php accepts, so nothing is ever hidden).
 const KEY = 'tt_sessions';
-const MAX_SESSIONS = 50;
+export const MAX_SESSIONS = 30;
 
 function read() {
   try {
@@ -39,6 +41,12 @@ export function saveSession(session) {
 
 export function removeSession(id) {
   write(read().filter((s) => String(s.id) !== String(id)));
+}
+
+/** Forget several discussions at once (e.g. after they were moved into the user's account). */
+export function removeSessions(ids) {
+  const drop = new Set(ids.map(String));
+  write(read().filter((s) => !drop.has(String(s.id))));
 }
 
 export function getToken(id) {

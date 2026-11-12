@@ -126,3 +126,34 @@ export const IconSpinner = ({ size = 18, className = '' }) => (
     <path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
   </svg>
 );
+export const IconEye = (p) => (
+  <Svg {...p}>
+    <path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z" />
+    <circle cx="12" cy="12" r="3" />
+  </Svg>
+);
+export const IconEyeOff = (p) => (
+  <Svg {...p}>
+    <path d="M9.9 5.2A10.4 10.4 0 0 1 12 5c6.4 0 10 7 10 7a17.6 17.6 0 0 1-2.7 3.7M6.6 6.6C3.7 8.4 2 12 2 12s3.6 7 10 7a9.7 9.7 0 0 0 5.4-1.6" />
+    <path d="M9.9 9.9a3 3 0 0 0 4.2 4.2M2 2l20 20" />
+  </Svg>
+);
+export const IconUser = (p) => (
+  <Svg {...p}>
+    <circle cx="12" cy="8" r="3.6" />
+    <path d="M5 20c0-3.8 3.1-6.3 7-6.3s7 2.5 7 6.3" />
+  </Svg>
+);
+export const IconLogOut = (p) => (
+  <Svg {...p}>
+    <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+    <polyline points="16 17 21 12 16 7" />
+    <line x1="21" y1="12" x2="9" y2="12" />
+  </Svg>
+);
+export const IconKey = (p) => (
+  <Svg {...p}>
+    <circle cx="7.5" cy="15.5" r="4.5" />
+    <path d="M10.7 12.3 21 2M17 6l3 3M15 8l2 2" />
+  </Svg>
+);

@@ -3,15 +3,36 @@ import { IconSpinner } from './Icons.jsx';
 
 export default function ConfirmModal({ open, title, body, confirmLabel = 'Confirm', cancelLabel = 'Cancel', danger = false, busy = false, onConfirm, onCancel }) {
   const cancelRef = useRef(null);
+  const confirmRef = useRef(null);
 
   useEffect(() => {
     if (!open) return undefined;
+    const previous = document.activeElement;
     const onKey = (e) => {
       if (e.key === 'Escape') onCancel();
+      // Keep keyboard focus inside the dialog (it only has two buttons).
+      if (e.key === 'Tab') {
+        const first = cancelRef.current;
+        const last = confirmRef.current;
+        if (!first || !last) return;
+        if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault();
+          last.focus();
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault();
+          first.focus();
+        } else if (![first, last].includes(document.activeElement)) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
     };
     document.addEventListener('keydown', onKey);
     if (cancelRef.current) cancelRef.current.focus();
-    return () => document.removeEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      if (previous && typeof previous.focus === 'function') previous.focus();
+    };
   }, [open, onCancel]);
 
   if (!open) return null;
@@ -37,6 +58,7 @@ export default function ConfirmModal({ open, title, body, confirmLabel = 'Confir
             {cancelLabel}
           </button>
           <button
+            ref={confirmRef}
             type="button"
             onClick={onConfirm}
             disabled={busy}

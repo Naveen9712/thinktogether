@@ -1,5 +1,6 @@
 import axios from 'axios';
 import { getToken } from './sessions.js';
+import { SESSION_EXPIRED_EVENT, getAuthToken, setAuth } from './auth.js';
 
 /**
  * One Axios instance for the whole app. Every PHP endpoint returns
@@ -11,6 +12,16 @@ export const api = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL || '/api',
   timeout: 90000,
   headers: { 'Content-Type': 'application/json' },
+});
+
+// Signed in: every request carries the login session (header, not cookie: the API is on another domain).
+api.interceptors.request.use((config) => {
+  const token = getAuthToken();
+  if (token && !config.skipAuth) {
+    config.headers = config.headers || {};
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
 });
 
 api.interceptors.response.use(
@@ -37,14 +48,33 @@ api.interceptors.response.use(
     err.code = apiErr?.code || error.code;
     err.details = apiErr?.details;
     err.status = error.response?.status;
+    if (err.code === 'session_expired') {
+      // The server no longer knows this login (logged out elsewhere or expired): become a guest.
+      setAuth(null);
+      window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT));
+    }
     return Promise.reject(err);
   }
 );
 
 export const ping = () => api.get('/ping.php');
 
+// ------------------------------------------------------------------ accounts
+const AUTH = '/auth';
+
+export const signup = (payload) => api.post(`${AUTH}/signup.php`, payload, { skipAuth: true });
+export const login = (payload) => api.post(`${AUTH}/login.php`, payload, { skipAuth: true });
+export const passwordHint = (username) => api.post(`${AUTH}/hint.php`, { username }, { skipAuth: true });
+export const me = () => api.get(`${AUTH}/me.php`);
+export const logout = () => api.post(`${AUTH}/logout.php`, {});
+/** Moves guest discussions from this browser into the signed-in account. sessions: [{ id, token }] */
+export const claimDiscussions = (sessions) =>
+  api.post(`${AUTH}/claim.php`, { discussions: sessions.slice(0, 50).map((s) => ({ id: Number(s.id), token: s.token })) });
+
+// ------------------------------------------------------------------ discussions
 const BASE = '/discussions';
-const LONG_TIMEOUT = 120000;
+// Must stay above the server's REQUEST_BUDGET_SECONDS (140 s) so the browser never gives up first.
+const LONG_TIMEOUT = 170000;
 
 function noAccess() {
   const err = new Error('You do not have access to this discussion on this device.');
@@ -52,10 +82,14 @@ function noAccess() {
   return err;
 }
 
-/** Builds the Axios config for a discussion call, adding the secret token header. */
+/**
+ * Builds the Axios config for a discussion call. Guests prove access with the discussion's secret token;
+ * signed-in users' own discussions are authorised by the login session alone.
+ */
 function withToken(id, config = {}) {
   const token = getToken(id);
-  if (!token) throw noAccess();
+  if (!token && !getAuthToken()) throw noAccess();
+  if (!token) return config;
   return { ...config, headers: { ...(config.headers || {}), 'X-Discussion-Token': token } };
 }
 
@@ -105,11 +139,16 @@ export async function generateSummary(id, opts = {}) {
   return api.post(`${BASE}/generate-summary.php`, { id: num(id) }, withToken(id, { timeout: LONG_TIMEOUT, signal: opts.signal }));
 }
 
-/** sessions: [{ id, token }]; at most 30 pairs are sent. */
-export async function getHistory(sessions, opts = {}) {
+/** Signed in: the account's discussions (paged). */
+export async function getAccountHistory({ offset = 0, limit = 50, signal } = {}) {
+  return api.get(`${BASE}/history.php`, { params: { offset, limit }, signal });
+}
+
+/** Guest: discussions saved on this device. sessions: [{ id, token }]; at most 30 pairs are sent. */
+export async function getDeviceHistory(sessions, opts = {}) {
   const header = sessions
     .slice(0, 30)
     .map((s) => `${s.id}:${s.token}`)
     .join(',');
-  return api.get(`${BASE}/history.php`, { headers: { 'X-History-Tokens': header }, signal: opts.signal });
+  return api.get(`${BASE}/history.php`, { headers: { 'X-History-Tokens': header }, signal: opts.signal, skipAuth: true });
 }

@@ -10,11 +10,15 @@ import {
   sendUserMessage,
 } from '../lib/api.js';
 import { getToken } from '../lib/sessions.js';
+import { getAuthToken } from '../lib/auth.js';
 import { DRIVING_STATUSES, friendlyError } from '../lib/format.js';
+import { lastStableId, mergeMessages } from '../lib/messages.js';
 import { useToast } from '../components/Toast.jsx';
 
 const POLL_IDLE_MS = 1500;
 const POLL_GENERATING_MS = 1000;
+const POLL_WAITING_MS = 4000; // paused or waiting for the human: nothing changes on its own
+const POLL_HIDDEN_MS = 15000; // tab in the background: keep the server load tiny
 const POLL_ERROR_MS = 3000;
 const TURN_GAP_MS = 800;
 const CONFLICT_WAIT_MS = 2000;
@@ -25,14 +29,7 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const isDriving = (status) => DRIVING_STATUSES.includes(status);
 const isTerminal = (status) => status === 'completed' || status === 'ended';
 const isCanceled = (e) => e && (e.code === 'ERR_CANCELED' || e.name === 'CanceledError');
-
-/** Id of the newest message that is no longer streaming; used as the `after` cursor. */
-function lastStableId(messages) {
-  for (let i = messages.length - 1; i >= 0; i -= 1) {
-    if (messages[i].generation_status !== 'generating') return messages[i].id;
-  }
-  return 0;
-}
+const pageHidden = () => typeof document !== 'undefined' && document.visibilityState === 'hidden';
 
 /**
  * Owns every piece of engine logic for a discussion room: polling, message merging,
@@ -43,7 +40,8 @@ export default function useDiscussionRoom(id) {
   const toastRef = useRef(toast);
   toastRef.current = toast;
 
-  const hasToken = useMemo(() => Boolean(getToken(id)), [id]);
+  // Guests need this discussion's secret token; signed-in users are checked by the server (their account).
+  const hasToken = useMemo(() => Boolean(getToken(id) || getAuthToken()), [id]);
 
   const [discussion, setDiscussion] = useState(null);
   const [messages, setMessages] = useState([]);
@@ -64,6 +62,8 @@ export default function useDiscussionRoom(id) {
   const busyRef = useRef(null);
   const sendingRef = useRef(false);
   const lastErrorKeyRef = useRef('');
+  const wakeRef = useRef(null);
+  const autoPausedRef = useRef(false);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -88,20 +88,8 @@ export default function useDiscussionRoom(id) {
 
   /** Merges messages by id, keeps them ordered, and never lets a stale "generating" copy win. */
   const mergeIn = useCallback((incoming) => {
-    if (!incoming || incoming.length === 0) return;
-    const map = new Map(messagesRef.current.map((m) => [m.id, m]));
-    let changed = false;
-    incoming.forEach((m) => {
-      const old = map.get(m.id);
-      if (old) {
-        if (old.generation_status !== 'generating' && m.generation_status === 'generating') return;
-        if (old.message === m.message && old.generation_status === m.generation_status) return;
-      }
-      map.set(m.id, m);
-      changed = true;
-    });
-    if (!changed) return;
-    const next = Array.from(map.values()).sort((a, b) => a.id - b.id);
+    const next = mergeMessages(messagesRef.current, incoming);
+    if (next === messagesRef.current) return;
     messagesRef.current = next;
     setMessages(next);
   }, []);
@@ -111,10 +99,14 @@ export default function useDiscussionRoom(id) {
     if (!hasToken) return undefined;
     let cancelled = false;
     let timer = null;
+    let inFlight = false;
     const controller = new AbortController();
 
     const run = async () => {
-      if (cancelled) return;
+      if (cancelled || inFlight) return;
+      inFlight = true;
+      if (timer) clearTimeout(timer);
+      timer = null;
       const startVersion = versionRef.current;
       let delay = POLL_IDLE_MS;
       let stop = false;
@@ -133,8 +125,12 @@ export default function useDiscussionRoom(id) {
           stop = true;
         } else if (d && d.generating) {
           delay = POLL_GENERATING_MS;
+        } else if (d && (d.status === 'paused' || d.status === 'waiting_user')) {
+          delay = POLL_WAITING_MS;
         }
+        if (pageHidden()) delay = POLL_HIDDEN_MS;
       } catch (e) {
+        inFlight = false;
         if (cancelled || isCanceled(e)) return;
         if (e.status === 404 || e.code === 'not_found') {
           setFatal('not_found');
@@ -152,16 +148,53 @@ export default function useDiscussionRoom(id) {
         }
         delay = POLL_ERROR_MS;
       }
+      inFlight = false;
       if (!cancelled && !stop) timer = setTimeout(run, delay);
+    };
+
+    // Lets the page poll immediately when the user comes back to the tab.
+    wakeRef.current = () => {
+      if (!cancelled && timer) run();
     };
 
     run();
     return () => {
       cancelled = true;
+      wakeRef.current = null;
       if (timer) clearTimeout(timer);
       controller.abort();
     };
   }, [id, hasToken, applyDiscussion, mergeIn]);
+
+  // ---------------------------------------------------------------- leaving the page
+  // Phones stop running a page in the background, so no new turns would be asked for while the server clock
+  // keeps running. Pause when the page is hidden; on return, poll at once and tell the user how to continue.
+  useEffect(() => {
+    if (!hasToken) return undefined;
+    const onVisibility = () => {
+      if (pageHidden()) {
+        const d = discussionRef.current;
+        if (d && d.status === 'active' && !busyRef.current && !sendingRef.current) {
+          autoPausedRef.current = true;
+          pauseDiscussion(id)
+            .then((res) => {
+              if (res && res.discussion && mountedRef.current) applyDiscussion(res.discussion, true);
+            })
+            .catch(() => {
+              autoPausedRef.current = false;
+            });
+        }
+        return;
+      }
+      if (wakeRef.current) wakeRef.current();
+      if (autoPausedRef.current) {
+        autoPausedRef.current = false;
+        toastRef.current.info('We paused the discussion while you were away. Press Resume to continue.');
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => document.removeEventListener('visibilitychange', onVisibility);
+  }, [id, hasToken, applyDiscussion]);
 
   // ---------------------------------------------------------------- turn driver
   const applyTurnResult = useCallback(
@@ -279,6 +312,7 @@ export default function useDiscussionRoom(id) {
 
   const resume = useCallback(() => {
     setTurnError(null);
+    autoPausedRef.current = false;
     return act('resume', () => resumeDiscussion(id), 'Discussion resumed.');
   }, [act, id]);
 
