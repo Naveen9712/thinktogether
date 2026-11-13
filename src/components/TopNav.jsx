@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import Logo from './Logo.jsx';
 import ThemeToggle from './ThemeToggle.jsx';
-import { IconHistory, IconLogOut } from './Icons.jsx';
+import { IconHistory, IconLogOut, IconUser } from './Icons.jsx';
 import { useAuth } from '../hooks/useAuth.jsx';
 import { useToast } from './Toast.jsx';
 
@@ -51,6 +51,10 @@ function UserMenu({ user, onLogout }) {
           <Link role="menuitem" to="/history" onClick={() => setOpen(false)} className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm text-fg hover:bg-surface-2">
             <IconHistory size={16} />
             My discussions
+          </Link>
+          <Link role="menuitem" to="/personalities" onClick={() => setOpen(false)} className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm text-fg hover:bg-surface-2">
+            <IconUser size={16} />
+            My AI personalities
           </Link>
           <button
             role="menuitem"

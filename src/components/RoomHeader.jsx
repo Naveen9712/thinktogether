@@ -29,6 +29,12 @@ export default function RoomHeader({ discussion, clock }) {
               aria-expanded={expanded}
               title={expanded ? 'Collapse topic' : 'Show full topic'}
             >
+              {discussion.mode_name && (
+                <span className="mt-px shrink-0 rounded-md border border-line bg-surface-2 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted">
+                  {discussion.mode_name}
+                  {discussion.session > 1 ? ` · S${discussion.session}` : ''}
+                </span>
+              )}
               <span className={`min-w-0 text-sm font-medium leading-snug text-fg ${expanded ? 'whitespace-pre-wrap break-words' : 'truncate'}`}>
                 {discussion.topic}
               </span>

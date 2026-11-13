@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import TopNav from '../components/TopNav.jsx';
 import StatusBadge from '../components/StatusBadge.jsx';
@@ -6,7 +6,9 @@ import ErrorState from '../components/ErrorState.jsx';
 import MessageCard from '../components/MessageCard.jsx';
 import Skeleton, { MessageSkeletons } from '../components/Skeleton.jsx';
 import Avatar from '../components/Avatar.jsx';
-import { IconCheck, IconChevronDown, IconCopy, IconSpinner } from '../components/Icons.jsx';
+import ResumeDialog from '../components/ResumeDialog.jsx';
+import { IconCheck, IconChevronDown, IconCopy, IconPlay, IconSpinner } from '../components/Icons.jsx';
+import { metaFor, participantMap, stanceLabel } from '../lib/participants.js';
 import { useToast } from '../components/Toast.jsx';
 import { generateSummary, getMessages, getSummary } from '../lib/api.js';
 import { getToken } from '../lib/sessions.js';
@@ -25,6 +27,7 @@ const LIST_SECTIONS = [
 
 function buildPlainText(topic, s) {
   const bullets = (list) => (list && list.length ? list.map((x) => `- ${x}`).join('\n') : '- None');
+  const perspectives = (s.perspectives || []).flatMap((p) => [`${p.name}${p.personality ? ` (${p.personality})` : ''}: ${p.text}`, '']);
   return [
     `ThinkTogether summary: ${topic}`,
     '',
@@ -34,12 +37,12 @@ function buildPlainText(topic, s) {
     'MAIN IDEAS EXPLORED',
     bullets(s.main_ideas),
     '',
-    "ALPHA'S STRONGEST ARGUMENTS",
-    s.alpha_perspective,
+    "EACH AI'S STRONGEST ARGUMENTS",
+    ...perspectives,
+    'STRONGEST ARGUMENTS OF THE DISCUSSION',
+    bullets(s.strongest_arguments),
     '',
-    "BETA'S STRONGEST ARGUMENTS",
-    s.beta_perspective,
-    '',
+    ...(s.mode_outcome ? [s.mode_outcome.title.toUpperCase(), bullets(s.mode_outcome.points), ''] : []),
     'POINTS OF AGREEMENT',
     bullets(s.agreement_points),
     '',
@@ -129,7 +132,7 @@ function SummarySkeleton() {
   );
 }
 
-function Transcript({ id }) {
+function Transcript({ id, metaMap }) {
   const [open, setOpen] = useState(false);
   const [state, setState] = useState({ loading: false, loaded: false, error: '', messages: [] });
 
@@ -170,10 +173,72 @@ function Transcript({ id }) {
           {state.loaded && state.messages.length > 0 && (
             <div className="space-y-4">
               {state.messages.map((m) => (
-                <MessageCard key={m.id} message={m} />
+                <MessageCard key={m.id} message={m} metaMap={metaMap} />
               ))}
             </div>
           )}
+        </div>
+      )}
+    </section>
+  );
+}
+
+/** One card per AI participant with its strongest arguments. */
+function Perspectives({ summary, metaMap }) {
+  const items = summary.perspectives || [];
+  if (items.length === 0) return null;
+  return (
+    <div className={`grid grid-cols-1 gap-4 ${items.length > 1 ? 'md:grid-cols-2' : ''}`}>
+      {items.map((p) => {
+        const meta = metaFor(metaMap, p.key);
+        const st = meta.style;
+        return (
+          <section key={p.key} className={`animate-fade-up rounded-2xl border ${st.border} ${st.soft} p-5`}>
+            <div className="mb-3 flex items-center gap-2.5">
+              <Avatar meta={meta} size={30} />
+              <div className="min-w-0">
+                <h2 className={`text-sm font-semibold ${st.text}`}>{p.name || meta.name}</h2>
+                <p className="text-xs text-muted">
+                  {p.personality || meta.label}
+                  {meta.stance ? ` · ${stanceLabel(meta.stance)}` : ''}
+                </p>
+              </div>
+            </div>
+            <Prose>{p.text}</Prose>
+          </section>
+        );
+      })}
+    </div>
+  );
+}
+
+/** Summaries of the sessions before the current one (a resumed discussion has one per session). */
+function EarlierSessions({ sessions, currentPart }) {
+  const [open, setOpen] = useState(false);
+  const earlier = (sessions || []).filter((s) => s.part < currentPart);
+  if (earlier.length === 0) return null;
+  return (
+    <section className="rounded-2xl border border-line bg-surface">
+      <button type="button" onClick={() => setOpen((v) => !v)} className="flex w-full items-center justify-between gap-3 p-5 text-left" aria-expanded={open}>
+        <span className="text-sm font-semibold uppercase tracking-wide text-fg">
+          Earlier sessions <span className="font-normal normal-case text-muted">({earlier.length})</span>
+        </span>
+        <IconChevronDown size={18} className={`text-muted transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+      {open && (
+        <div className="space-y-4 border-t border-line p-5">
+          {earlier.map((s) => (
+            <div key={s.part} className="rounded-xl border border-line p-4">
+              <p className="text-xs font-semibold uppercase tracking-wide text-muted">Session {s.part}</p>
+              {s.overview && <p className="mt-2 text-sm leading-relaxed text-fg">{s.overview}</p>}
+              {s.final_conclusion && (
+                <p className="mt-2 whitespace-pre-wrap text-sm leading-relaxed text-muted">
+                  <span className="font-semibold text-fg">Conclusion: </span>
+                  {s.final_conclusion}
+                </p>
+              )}
+            </div>
+          ))}
         </div>
       )}
     </section>
@@ -188,6 +253,9 @@ function SummaryView({ id }) {
   const [state, setState] = useState({ loading: hasToken, error: '', code: hasToken ? '' : 'no_access', data: null });
   const [generating, setGenerating] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [resumeOpen, setResumeOpen] = useState(false);
+  const participants = state.data && state.data.discussion ? state.data.discussion.participants : null;
+  const metaMap = useMemo(() => participantMap({ participants }), [participants]);
   const mountedRef = useRef(true);
 
   useEffect(() => {
@@ -224,9 +292,9 @@ function SummaryView({ id }) {
   const generate = async () => {
     setGenerating(true);
     try {
-      const res = await generateSummary(id);
+      await generateSummary(id);
       if (!mountedRef.current) return;
-      setState({ loading: false, error: '', code: '', data: { summary: res.summary, discussion: res.discussion } });
+      await load();
       toast.success('Summary generated.');
     } catch (e) {
       toast.error(friendlyError(e));
@@ -247,6 +315,18 @@ function SummaryView({ id }) {
       toast.error('Could not copy. Select the text manually instead.');
     }
   };
+
+  const resumeButton = (discussion, primary = false) =>
+    discussion && discussion.can_resume ? (
+      <button
+        type="button"
+        onClick={() => setResumeOpen(true)}
+        className={`flex items-center gap-1.5 rounded-xl px-3.5 py-2 text-sm font-semibold transition ${primary ? 'bg-alpha text-bg hover:opacity-90' : 'border border-line bg-surface text-fg hover:bg-surface-2'}`}
+      >
+        <IconPlay size={15} />
+        Resume conversation
+      </button>
+    ) : null;
 
   const homeLink = (
     <Link to="/" className="rounded-xl bg-alpha px-4 py-2.5 text-sm font-semibold text-bg transition hover:opacity-90">
@@ -275,17 +355,28 @@ function SummaryView({ id }) {
   } else if (state.error) {
     body = <ErrorState title="Could not load the summary" message={state.error} onRetry={load} />;
   } else if (state.data) {
-    const { summary, discussion } = state.data;
+    const { summary, discussion, sessions } = state.data;
+    const byGamma = (discussion.participants || []).some((p) => p.role === 'moderator');
     if (summary) {
       body = (
         <div className="space-y-4">
           <div className="animate-fade-up">
             <div className="flex flex-wrap items-center gap-2">
               <StatusBadge status={discussion.status} />
-              <span className="text-xs text-muted">{discussion.turn_count} turns</span>
+              {discussion.mode_name && <span className="rounded-md border border-line bg-surface-2 px-1.5 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-muted">{discussion.mode_name}</span>}
+              <span className="text-xs text-muted">
+                {discussion.turn_count} turns{sessions && sessions.length > 1 ? ` · Summary of session ${summary.part}` : ''}
+              </span>
             </div>
             <h1 className="mt-3 break-words text-2xl font-bold leading-tight tracking-tight text-fg sm:text-3xl">{discussion.topic}</h1>
+            {byGamma && (
+              <p className="mt-2 flex items-center gap-1.5 text-sm text-muted">
+                <Avatar meta={metaFor(metaMap, 'gamma')} size={20} />
+                Written by AI Gamma, the neutral moderator.
+              </p>
+            )}
             <div className="mt-4 flex flex-wrap gap-2">
+              {resumeButton(discussion, true)}
               <button
                 type="button"
                 onClick={() => copy(discussion.topic, summary)}
@@ -310,22 +401,20 @@ function SummaryView({ id }) {
             <BulletList items={summary.main_ideas} />
           </Section>
 
-          <div className="grid gap-4 md:grid-cols-2">
+          <Perspectives summary={summary} metaMap={metaMap} />
+
+          {summary.strongest_arguments && summary.strongest_arguments.length > 0 && (
+            <Section title="Strongest arguments" accent="text-gamma">
+              <BulletList items={summary.strongest_arguments} />
+            </Section>
+          )}
+
+          {summary.mode_outcome && (
             <section className="animate-fade-up rounded-2xl border border-alpha/30 bg-alpha/5 p-5">
-              <div className="mb-3 flex items-center gap-2.5">
-                <Avatar who="alpha" size={28} />
-                <h2 className="text-sm font-semibold uppercase tracking-wide text-alpha">Alpha&apos;s strongest arguments</h2>
-              </div>
-              <Prose>{summary.alpha_perspective}</Prose>
+              <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-alpha">{summary.mode_outcome.title}</h2>
+              <BulletList items={summary.mode_outcome.points} />
             </section>
-            <section className="animate-fade-up rounded-2xl border border-beta/30 bg-beta/5 p-5">
-              <div className="mb-3 flex items-center gap-2.5">
-                <Avatar who="beta" size={28} />
-                <h2 className="text-sm font-semibold uppercase tracking-wide text-beta">Beta&apos;s strongest arguments</h2>
-              </div>
-              <Prose>{summary.beta_perspective}</Prose>
-            </section>
-          </div>
+          )}
 
           {LIST_SECTIONS.filter((s) => s.key !== 'main_ideas').map((s) => (
             <Section key={s.key} title={s.title} accent={s.key === 'human_contributions' ? 'text-you' : 'text-fg'}>
@@ -338,16 +427,20 @@ function SummaryView({ id }) {
             <p className="whitespace-pre-wrap break-words text-base leading-relaxed text-fg">{summary.final_conclusion}</p>
           </section>
 
-          <Transcript id={id} />
+          <EarlierSessions sessions={sessions} currentPart={discussion.session} />
+          <Transcript id={id} metaMap={metaMap} />
         </div>
       );
     } else if (LIVE_STATUSES.includes(discussion.status)) {
       body = (
-        <ErrorState tone="muted" title="Discussion still in progress" message="The summary is created once the discussion finishes. You can head back to the room to follow along.">
-          <Link to={`/room/${id}`} className="rounded-xl bg-alpha px-4 py-2.5 text-sm font-semibold text-bg transition hover:opacity-90">
-            Back to the room
-          </Link>
-        </ErrorState>
+        <div className="space-y-4">
+          <ErrorState tone="muted" title="Discussion still in progress" message="The summary is created once the discussion finishes. You can head back to the room to follow along.">
+            <Link to={`/room/${id}`} className="rounded-xl bg-alpha px-4 py-2.5 text-sm font-semibold text-bg transition hover:opacity-90">
+              Back to the room
+            </Link>
+          </ErrorState>
+          <EarlierSessions sessions={sessions} currentPart={discussion.session} />
+        </div>
       );
     } else if (discussion.status === 'ended') {
       body = (
@@ -366,8 +459,10 @@ function SummaryView({ id }) {
               {generating ? 'Generating summary…' : 'Generate summary'}
             </button>
             {generating && <p className="mt-3 text-xs text-muted">This can take up to a minute. Please keep this page open.</p>}
+            {!generating && discussion.can_resume && <div className="mt-3">{resumeButton(discussion)}</div>}
           </div>
-          <Transcript id={id} />
+          <EarlierSessions sessions={sessions} currentPart={discussion.session} />
+          <Transcript id={id} metaMap={metaMap} />
         </div>
       );
     } else {
@@ -385,6 +480,19 @@ function SummaryView({ id }) {
     <div className="min-h-[100dvh]">
       <TopNav />
       <main className="mx-auto max-w-3xl px-4 pb-16 pt-8">{body}</main>
+      {state.data && state.data.discussion && (
+        <ResumeDialog
+          open={resumeOpen}
+          discussionId={id}
+          topic={state.data.discussion.topic}
+          onClose={() => setResumeOpen(false)}
+          onResumed={() => {
+            setResumeOpen(false);
+            toast.success('Conversation resumed. The AIs remember everything said so far.');
+            navigate(`/room/${id}`);
+          }}
+        />
+      )}
     </div>
   );
 }

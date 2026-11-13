@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import useDiscussionRoom from '../hooks/useDiscussionRoom.js';
 import RoomHeader from '../components/RoomHeader.jsx';
@@ -8,9 +8,10 @@ import Controls from '../components/Controls.jsx';
 import ErrorState from '../components/ErrorState.jsx';
 import SpeakingIndicator from '../components/SpeakingIndicator.jsx';
 import Avatar from '../components/Avatar.jsx';
+import ResumeDialog from '../components/ResumeDialog.jsx';
 import { MessageSkeletons } from '../components/Skeleton.jsx';
-import { IconAlert, IconArrowDown, IconWifiOff } from '../components/Icons.jsx';
-import { AGENTS } from '../lib/format.js';
+import { IconAlert, IconArrowDown, IconPlay, IconWifiOff } from '../components/Icons.jsx';
+import { metaFor, participantMap, participantsKey } from '../lib/participants.js';
 import { useAuth } from '../hooks/useAuth.jsx';
 
 const NEAR_BOTTOM_PX = 120;
@@ -20,51 +21,63 @@ function distanceFromBottom() {
   return doc.scrollHeight - (window.scrollY + window.innerHeight);
 }
 
-function EmptyConversation({ discussion }) {
-  const next = AGENTS[discussion.next_speaker] || AGENTS.alpha;
+function EmptyConversation({ discussion, metaMap }) {
+  const next = metaFor(metaMap, discussion.next_speaker);
   const running = discussion.status === 'active' || discussion.status === 'concluding';
   return (
     <div className="flex animate-fade-in flex-col items-center px-4 py-16 text-center">
-      <Avatar who={discussion.next_speaker === 'beta' ? 'beta' : 'alpha'} size={56} speaking={running} />
+      <Avatar meta={next} size={56} speaking={running} />
       <h2 className="mt-5 text-base font-semibold text-fg">
-        {running ? `${next.name} is preparing the opening thoughts` : 'No messages yet'}
+        {running ? (next.moderator ? `${next.name} is opening the discussion` : `${next.name} is preparing the opening thoughts`) : 'No messages yet'}
       </h2>
       <p className="mt-1.5 max-w-sm text-sm text-muted">
         {running
           ? 'The first response usually takes a few seconds. You can step in at any time.'
           : 'Messages will appear here once the discussion continues.'}
       </p>
-      {running && <SpeakingIndicator variant="dots" colorClass={next.text} className="mt-4" />}
+      {running && <SpeakingIndicator variant="dots" colorClass={next.style.text} className="mt-4" />}
     </div>
   );
 }
 
-function FinishedBanner({ discussion, id }) {
+function FinishedBanner({ discussion, id, onResume }) {
   const completed = discussion.status === 'completed';
   return (
     <div className="animate-fade-up rounded-2xl border border-line bg-surface p-4">
       <p className="text-sm font-semibold text-fg">{completed ? 'This discussion is complete.' : 'You ended this discussion.'}</p>
       <p className="mt-0.5 text-sm text-muted">
         {completed
-          ? 'The thinkers shared their closing thoughts and the summary is ready.'
-          : 'No closing thoughts were generated, but you can still create a summary.'}
+          ? 'Everyone shared their closing thoughts and the summary is ready. You can also continue the conversation.'
+          : 'No closing thoughts were generated, but you can still create a summary or continue the conversation.'}
       </p>
       <div className="mt-3 flex flex-wrap gap-2">
-        <Link to={`/summary/${id}`} className="rounded-xl bg-alpha px-4 py-2.5 text-sm font-semibold text-bg transition hover:opacity-90">
+        {discussion.can_resume && (
+          <button type="button" onClick={onResume} className="flex items-center gap-1.5 rounded-xl bg-alpha px-4 py-2.5 text-sm font-semibold text-bg transition hover:opacity-90">
+            <IconPlay size={15} />
+            Resume conversation
+          </button>
+        )}
+        <Link
+          to={`/summary/${id}`}
+          className={`rounded-xl px-4 py-2.5 text-sm font-semibold transition ${discussion.can_resume ? 'border border-line text-fg hover:bg-surface-2' : 'bg-alpha text-bg hover:opacity-90'}`}
+        >
           View summary
         </Link>
         <Link to="/" className="rounded-xl border border-line px-4 py-2.5 text-sm font-semibold text-fg transition hover:bg-surface-2">
           New discussion
         </Link>
       </div>
+      {!discussion.can_resume && discussion.resume_count > 0 && (
+        <p className="mt-2 text-xs text-muted">This discussion has been resumed the maximum number of times.</p>
+      )}
     </div>
   );
 }
 
 /** Screen-reader announcement of each finished message (the visual list itself is not a live region). */
-function LiveAnnouncer({ messages }) {
-  const last = [...messages].reverse().find((m) => m.generation_status !== 'generating' && m.speaker !== 'user');
-  const name = last ? (AGENTS[last.speaker] ? AGENTS[last.speaker].name : '') : '';
+function LiveAnnouncer({ messages, metaMap }) {
+  const last = [...messages].reverse().find((m) => m.generation_status !== 'generating' && m.speaker !== 'user' && m.speaker !== 'system');
+  const name = last ? metaFor(metaMap, last.speaker).name : '';
   const text = last ? `${name}: ${last.message.slice(0, 600)}` : '';
   return (
     <div className="sr-only" aria-live="polite" aria-atomic="true">
@@ -103,6 +116,13 @@ function RoomView({ id }) {
   const navigate = useNavigate();
   const atBottomRef = useRef(true);
   const [showJump, setShowJump] = useState(false);
+  const [resumeOpen, setResumeOpen] = useState(false);
+
+  // Names, personalities and colours of everyone in the room. Rebuilt only when the participants change.
+  const participants = discussion ? discussion.participants : null;
+  const pKey = participantsKey(discussion);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- `participants` only changes when pKey does
+  const metaMap = useMemo(() => participantMap({ participants }), [pKey]);
 
   useEffect(() => {
     const onScroll = () => {
@@ -159,13 +179,13 @@ function RoomView({ id }) {
       </div>
 
       <main className="mx-auto w-full max-w-3xl flex-1 px-4 py-5">
-        <LiveAnnouncer messages={messages} />
+        <LiveAnnouncer messages={messages} metaMap={metaMap} />
         {!discussion && <MessageSkeletons count={3} />}
-        {discussion && messages.length === 0 && <EmptyConversation discussion={discussion} />}
+        {discussion && messages.length === 0 && <EmptyConversation discussion={discussion} metaMap={metaMap} />}
         {messages.length > 0 && (
           <div className="space-y-4">
             {messages.map((m) => (
-              <MessageCard key={m.id} message={m} />
+              <MessageCard key={m.id} message={m} metaMap={metaMap} />
             ))}
           </div>
         )}
@@ -211,7 +231,7 @@ function RoomView({ id }) {
               </div>
             </div>
           )}
-          {discussion && finished && <FinishedBanner discussion={discussion} id={id} />}
+          {discussion && finished && <FinishedBanner discussion={discussion} id={id} onResume={() => setResumeOpen(true)} />}
           {discussion && !finished && (
             <Controls
               discussion={discussion}
@@ -232,6 +252,19 @@ function RoomView({ id }) {
           )}
         </div>
       </div>
+      {discussion && (
+        <ResumeDialog
+          open={resumeOpen}
+          discussionId={id}
+          topic={discussion.topic}
+          onClose={() => setResumeOpen(false)}
+          onResumed={(next) => {
+            setResumeOpen(false);
+            atBottomRef.current = true;
+            room.resumed(next);
+          }}
+        />
+      )}
     </div>
   );
 }

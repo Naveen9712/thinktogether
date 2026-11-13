@@ -9,6 +9,9 @@ const Summary = lazy(() => import('./pages/Summary.jsx'));
 const History = lazy(() => import('./pages/History.jsx'));
 const Login = lazy(() => import('./pages/Login.jsx'));
 const Signup = lazy(() => import('./pages/Signup.jsx'));
+const Personalities = lazy(() => import('./pages/Personalities.jsx'));
+// The admin panel is its own bundle: regular visitors never download it.
+const AdminApp = lazy(() => import('./pages/admin/AdminApp.jsx'));
 // The diagnostics page exists only in local development builds.
 const SetupCheck = import.meta.env.DEV ? lazy(() => import('./pages/SetupCheck.jsx')) : null;
 
@@ -30,6 +33,8 @@ export default function App() {
         <Route path="/history" element={<History />} />
         <Route path="/login" element={<Login />} />
         <Route path="/signup" element={<Signup />} />
+        <Route path="/personalities" element={<Personalities />} />
+        <Route path="/admin/*" element={<AdminApp />} />
         {SetupCheck && <Route path="/setup" element={<SetupCheck />} />}
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

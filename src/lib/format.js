@@ -105,6 +105,10 @@ const ERROR_TEXT = {
   invalid_credentials: 'Wrong username or password.',
   session_expired: 'Your login session has ended. Please log in again.',
   auth_required: 'Please log in first.',
+  resume_limit: 'This discussion has been resumed the maximum number of times. Please start a new discussion.',
+  personality_limit: 'You have reached the maximum number of saved personalities. Delete one to add another.',
+  admin_auth_required: 'Your admin session has ended. Please log in again.',
+  admin_disabled: 'The admin panel is not set up on the server yet.',
   ECONNABORTED: 'The request timed out. Check your connection and retry.',
   ERR_NETWORK: 'Cannot reach the server. Check your connection.',
 };

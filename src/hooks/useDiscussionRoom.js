@@ -38,6 +38,7 @@ const pageHidden = () => typeof document !== 'undefined' && document.visibilityS
 export default function useDiscussionRoom(id) {
   const toast = useToast();
   const toastRef = useRef(toast);
+  const doneToastRef = useRef(null); // id of the "discussion is complete" toast, so Resume can clear it
   toastRef.current = toast;
 
   // Guests need this discussion's secret token; signed-in users are checked by the server (their account).
@@ -51,6 +52,8 @@ export default function useDiscussionRoom(id) {
   const [busy, setBusy] = useState(null);
   const [sending, setSending] = useState(false);
   const [, setTick] = useState(0);
+  // Polling stops once a discussion has finished; "Resume conversation" bumps this to start it again.
+  const [pollEpoch, setPollEpoch] = useState(0);
 
   const mountedRef = useRef(true);
   const discussionRef = useRef(null);
@@ -82,7 +85,7 @@ export default function useDiscussionRoom(id) {
     anchorRef.current = { at: performance.now() };
     setDiscussion(next);
     if (prev && prev.status !== 'completed' && next.status === 'completed') {
-      toastRef.current.success('The discussion is complete. Your summary is ready.');
+      doneToastRef.current = toastRef.current.success('The discussion is complete. Your summary is ready.');
     }
   }, []);
 
@@ -164,7 +167,7 @@ export default function useDiscussionRoom(id) {
       if (timer) clearTimeout(timer);
       controller.abort();
     };
-  }, [id, hasToken, applyDiscussion, mergeIn]);
+  }, [id, hasToken, applyDiscussion, mergeIn, pollEpoch]);
 
   // ---------------------------------------------------------------- leaving the page
   // Phones stop running a page in the background, so no new turns would be asked for while the server clock
@@ -323,6 +326,20 @@ export default function useDiscussionRoom(id) {
 
   const end = useCallback(() => act('end', () => endDiscussion(id), 'Discussion ended.'), [act, id]);
 
+  /** Called by the Resume dialog after continue.php succeeded: show the new state and start polling again. */
+  const resumed = useCallback(
+    (next) => {
+      applyDiscussion(next, true);
+      setTurnError(null);
+      setPollEpoch((n) => n + 1);
+      // The "discussion is complete" note no longer applies once it is running again.
+      if (doneToastRef.current) toastRef.current.dismiss(doneToastRef.current);
+      doneToastRef.current = null;
+      toastRef.current.success('Conversation resumed. The AIs remember everything said so far.');
+    },
+    [applyDiscussion]
+  );
+
   const sendMessage = useCallback(
     async (text) => {
       const message = (text || '').trim();
@@ -380,6 +397,7 @@ export default function useDiscussionRoom(id) {
     resume,
     interrupt,
     end,
+    resumed,
     sendMessage,
   };
 }

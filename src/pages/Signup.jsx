@@ -83,7 +83,7 @@ export default function Signup() {
       <main className="px-4 pb-16 pt-10 sm:pt-16">
         <AuthCard
           title="Create your account"
-          subtitle="Your discussions are saved to your account, and only you can see them."
+          subtitle="Your discussions are private to your account. Other users and guests can never see them. Site admins can review account discussions for safety."
           footer={
             <>
               Already have an account?{' '}

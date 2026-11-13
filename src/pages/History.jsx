@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import TopNav from '../components/TopNav.jsx';
 import StatusBadge from '../components/StatusBadge.jsx';
 import ErrorState from '../components/ErrorState.jsx';
 import Skeleton from '../components/Skeleton.jsx';
-import { IconPlus, IconSpinner, IconTrash } from '../components/Icons.jsx';
+import ParticipantChips from '../components/ParticipantChips.jsx';
+import ResumeDialog from '../components/ResumeDialog.jsx';
+import { IconPlay, IconPlus, IconSpinner, IconTrash } from '../components/Icons.jsx';
 import { getAccountHistory, getDeviceHistory } from '../lib/api.js';
 import { MAX_SESSIONS, getSessions, removeSession } from '../lib/sessions.js';
 import { DEPTH_LABELS, LIVE_STATUSES, formatDate, friendlyError } from '../lib/format.js';
@@ -41,7 +43,7 @@ function RemoveButton({ onClick }) {
   );
 }
 
-function Card({ item, onRemove }) {
+function Card({ item, onRemove, onResume }) {
   const live = LIVE_STATUSES.includes(item.status);
   return (
     <article className="animate-fade-up rounded-2xl border border-line bg-surface p-4 transition hover:border-alpha/30">
@@ -50,18 +52,32 @@ function Card({ item, onRemove }) {
         <StatusBadge status={item.status} />
       </div>
       <p className="mt-2 text-xs text-muted">
-        {formatDate(item.created_at)} · {item.duration_minutes} min · {DEPTH_LABELS[item.discussion_depth] || item.discussion_depth} · {item.message_count}{' '}
-        {item.message_count === 1 ? 'message' : 'messages'}
+        {formatDate(item.created_at)} · {item.mode_name || 'Open discussion'} · {item.duration_minutes} min · {DEPTH_LABELS[item.discussion_depth] || item.discussion_depth} ·{' '}
+        {item.message_count} {item.message_count === 1 ? 'message' : 'messages'}
+        {item.resume_count > 0 ? ` · resumed ${item.resume_count}×` : ''}
       </p>
+      <ParticipantChips participants={item.participants} />
       <div className="mt-4 flex flex-wrap items-center gap-2">
         {live ? (
           <Link to={`/room/${item.id}`} className="rounded-xl bg-alpha px-4 py-2 text-sm font-semibold text-bg transition hover:opacity-90">
             Open room
           </Link>
         ) : (
-          <Link to={`/summary/${item.id}`} className="rounded-xl bg-alpha px-4 py-2 text-sm font-semibold text-bg transition hover:opacity-90">
-            View summary
-          </Link>
+          <>
+            <Link to={`/summary/${item.id}`} className="rounded-xl bg-alpha px-4 py-2 text-sm font-semibold text-bg transition hover:opacity-90">
+              View summary
+            </Link>
+            {item.can_resume && onResume && (
+              <button
+                type="button"
+                onClick={() => onResume(item)}
+                className="flex items-center gap-1.5 rounded-xl border border-line px-3.5 py-2 text-sm font-semibold text-fg transition hover:bg-surface-2"
+              >
+                <IconPlay size={14} />
+                Resume
+              </button>
+            )}
+          </>
         )}
         {onRemove && <RemoveButton onClick={() => onRemove(item.id)} />}
       </div>
@@ -84,7 +100,7 @@ function UnavailableCard({ session, onRemove }) {
   );
 }
 
-function AccountHistory() {
+function AccountHistory({ onResume }) {
   const [state, setState] = useState({ loading: true, items: [], total: 0, error: '', more: false });
 
   const load = useCallback(async (offset = 0, signal) => {
@@ -124,7 +140,7 @@ function AccountHistory() {
   return (
     <div className="space-y-3">
       {state.items.map((item) => (
-        <Card key={item.id} item={item} />
+        <Card key={item.id} item={item} onResume={onResume} />
       ))}
       {state.items.length < state.total && (
         <button
@@ -142,7 +158,7 @@ function AccountHistory() {
   );
 }
 
-function DeviceHistory() {
+function DeviceHistory({ onResume }) {
   const toast = useToast();
   const [state, setState] = useState({ loading: true, items: [], unavailable: [], error: '' });
 
@@ -198,7 +214,7 @@ function DeviceHistory() {
   return (
     <div className="space-y-3">
       {state.items.map((item) => (
-        <Card key={item.id} item={item} onRemove={remove} />
+        <Card key={item.id} item={item} onRemove={remove} onResume={onResume} />
       ))}
       {state.unavailable.map((s) => (
         <UnavailableCard key={s.id} session={s} onRemove={remove} />
@@ -209,6 +225,9 @@ function DeviceHistory() {
 
 export default function History() {
   const { isLoggedIn, user } = useAuth();
+  const navigate = useNavigate();
+  const toast = useToast();
+  const [resumeItem, setResumeItem] = useState(null);
 
   useEffect(() => {
     document.title = 'History | ThinkTogether';
@@ -225,7 +244,7 @@ export default function History() {
           <div className="min-w-0">
             <h1 className="text-2xl font-bold tracking-tight text-fg">{isLoggedIn ? 'My discussions' : 'History'}</h1>
             <p className="mt-1 text-sm text-muted">
-              {isLoggedIn ? `Everything saved in ${user.name}'s account. Only you can see these.` : 'Discussions started on this device as a guest.'}
+              {isLoggedIn ? `Everything saved in ${user.name}'s account. Other users and guests can never see these.` : 'Discussions started on this device as a guest. They are never reviewed by anyone.'}
             </p>
           </div>
           <Link to="/" className="flex shrink-0 items-center gap-1.5 rounded-xl border border-line bg-surface px-3.5 py-2 text-sm font-semibold text-fg transition hover:bg-surface-2">
@@ -247,8 +266,20 @@ export default function History() {
           </p>
         )}
 
-        {isLoggedIn ? <AccountHistory key={user.id} /> : <DeviceHistory />}
+        {isLoggedIn ? <AccountHistory key={user.id} onResume={setResumeItem} /> : <DeviceHistory onResume={setResumeItem} />}
       </main>
+      <ResumeDialog
+        open={resumeItem !== null}
+        discussionId={resumeItem ? resumeItem.id : null}
+        topic={resumeItem ? resumeItem.topic : ''}
+        onClose={() => setResumeItem(null)}
+        onResumed={() => {
+          const id = resumeItem.id;
+          setResumeItem(null);
+          toast.success('Conversation resumed. The AIs remember everything said so far.');
+          navigate(`/room/${id}`);
+        }}
+      />
     </div>
   );
 }

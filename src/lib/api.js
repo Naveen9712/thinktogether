@@ -99,6 +99,18 @@ export async function createDiscussion(payload) {
   return api.post(`${BASE}/create.php`, payload);
 }
 
+/** Modes, personalities (built-in + the user's own), Gamma and participant limits for the start form. */
+export async function getOptions(opts = {}) {
+  return api.get(`${BASE}/options.php`, { signal: opts.signal });
+}
+
+/** "Resume conversation": reopen a finished discussion for extraMinutes more, optionally with a new question. */
+export async function continueDiscussion(id, extraMinutes, question = '', opts = {}) {
+  const body = { id: num(id), extra_minutes: extraMinutes };
+  if (question && question.trim()) body.question = question.trim();
+  return api.post(`${BASE}/continue.php`, body, withToken(id, { signal: opts.signal }));
+}
+
 export async function getMessages(id, after = 0, opts = {}) {
   return api.get(`${BASE}/messages.php`, withToken(id, { params: { id: num(id), after }, signal: opts.signal }));
 }
@@ -138,6 +150,14 @@ export async function getSummary(id, opts = {}) {
 export async function generateSummary(id, opts = {}) {
   return api.post(`${BASE}/generate-summary.php`, { id: num(id) }, withToken(id, { timeout: LONG_TIMEOUT, signal: opts.signal }));
 }
+
+// ------------------------------------------------------------------ custom personalities (signed in)
+const PERSONALITIES = '/personalities';
+
+export const listPersonalities = (opts = {}) => api.get(`${PERSONALITIES}/list.php`, { signal: opts.signal });
+/** Creates (no id) or updates (with id) one of the user's personalities. */
+export const savePersonality = (payload) => api.post(`${PERSONALITIES}/save.php`, payload);
+export const deletePersonality = (id) => api.post(`${PERSONALITIES}/delete.php`, { id: Number(id) });
 
 /** Signed in: the account's discussions (paged). */
 export async function getAccountHistory({ offset = 0, limit = 50, signal } = {}) {

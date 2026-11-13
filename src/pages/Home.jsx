@@ -1,11 +1,14 @@
-import { useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import TopNav from '../components/TopNav.jsx';
-import Avatar from '../components/Avatar.jsx';
+import ModePicker from '../components/ModePicker.jsx';
+import ParticipantSetup from '../components/ParticipantSetup.jsx';
+import Skeleton from '../components/Skeleton.jsx';
 import { IconArrowRight, IconSpinner } from '../components/Icons.jsx';
-import { createDiscussion } from '../lib/api.js';
+import { createDiscussion, getOptions } from '../lib/api.js';
 import { saveSession } from '../lib/sessions.js';
-import { AGENTS, DEPTHS, friendlyError } from '../lib/format.js';
+import { fillSeats } from '../lib/participants.js';
+import { DEPTHS, friendlyError } from '../lib/format.js';
 import { radioKeyDown } from '../lib/radio.js';
 import { useAuth } from '../hooks/useAuth.jsx';
 
@@ -41,16 +44,29 @@ function Label({ htmlFor, children, hint }) {
   );
 }
 
-function ThinkerCard({ who }) {
-  const a = AGENTS[who];
+// The mode and participants chosen last time are remembered on this device (a convenience only).
+const SETUP_KEY = 'tt_setup';
+function readSetup() {
+  try {
+    const v = JSON.parse(localStorage.getItem(SETUP_KEY) || 'null');
+    return v && typeof v === 'object' ? v : null;
+  } catch {
+    return null;
+  }
+}
+function writeSetup(v) {
+  try {
+    localStorage.setItem(SETUP_KEY, JSON.stringify(v));
+  } catch {
+    // Storage blocked: nothing to remember.
+  }
+}
+
+function SetupSkeleton() {
   return (
-    <div className={`flex items-start gap-3 rounded-2xl border ${a.border} bg-surface p-4`}>
-      <Avatar who={who} size={44} />
-      <div className="min-w-0">
-        <p className={`text-sm font-semibold ${a.text}`}>{a.name}</p>
-        <p className="text-xs font-medium text-muted">{a.label}</p>
-        <p className="mt-1.5 text-sm leading-snug text-fg/80">{a.blurb}</p>
-      </div>
+    <div className="space-y-2.5" role="status" aria-label="Loading options">
+      <Skeleton className="h-16 w-full" />
+      <Skeleton className="h-16 w-full" />
     </div>
   );
 }
@@ -59,7 +75,7 @@ function GuestNote() {
   return (
     <div className="mx-auto mt-8 flex max-w-2xl flex-col gap-3 rounded-2xl border border-line bg-surface p-4 text-sm sm:flex-row sm:items-center sm:justify-between">
       <p className="text-muted">
-        <span className="font-semibold text-fg">You are using ThinkTogether as a guest.</span> Your discussions are saved only on this device. Log in to keep them in your account.
+        <span className="font-semibold text-fg">You are using ThinkTogether as a guest.</span> Guest discussions are saved only on this device and are never reviewed by anyone. Log in to keep them in your account and create your own AI personalities.
       </p>
       <div className="flex shrink-0 gap-2">
         <Link to="/login" className="rounded-xl border border-line px-3.5 py-2 font-semibold text-fg transition hover:bg-surface-2">
@@ -87,6 +103,45 @@ export default function Home() {
   const [submitting, setSubmitting] = useState(false);
   const [fieldErrors, setFieldErrors] = useState({});
   const [formError, setFormError] = useState('');
+  const [options, setOptions] = useState(null);
+  const [optionsError, setOptionsError] = useState('');
+  const [mode, setMode] = useState(() => (readSetup() || {}).mode || 'collaborative');
+  const [seats, setSeats] = useState([]);
+
+  // Modes, personalities (incl. the user's own) and limits come from the server, so the form always matches it.
+  const loadOptions = useCallback(async (signal) => {
+    setOptionsError('');
+    try {
+      const o = await getOptions({ signal });
+      setOptions(o);
+      const saved = readSetup() || {};
+      const count = Math.min(o.max_participants, Math.max(o.min_participants, Number(saved.count) || o.min_participants));
+      setSeats((prev) => fillSeats(o, count, prev.length ? prev : saved.seats || []));
+      setMode((m) => (o.modes.some((x) => x.key === m) ? m : o.default_mode));
+    } catch (e) {
+      if (e.code === 'ERR_CANCELED') return;
+      setOptionsError(friendlyError(e));
+    }
+  }, []);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    loadOptions(controller.signal);
+    return () => controller.abort();
+  }, [loadOptions, isLoggedIn]);
+
+  useEffect(() => {
+    if (options && seats.length) writeSetup({ mode, count: seats.length, seats });
+  }, [options, mode, seats]);
+
+  const changeCount = (n) => {
+    setSeats((prev) => fillSeats(options, n, prev));
+    clearError('participants');
+  };
+  const pickSeat = (index, ref) => {
+    setSeats((prev) => prev.map((r, i) => (i === index ? ref : r)));
+    clearError('participants');
+  };
 
   const isCustom = preset === 'custom';
   const minutes = isCustom ? Number(customMinutes) : preset;
@@ -118,6 +173,10 @@ export default function Home() {
         discussion_depth: depth,
       };
       if (context.trim()) payload.additional_context = context.trim();
+      if (options) {
+        payload.discussion_mode = mode;
+        payload.participants = seats;
+      }
       const res = await createDiscussion(payload);
       // Guests keep the secret token on this device; account discussions need no token.
       if (!isLoggedIn) {
@@ -133,7 +192,7 @@ export default function Home() {
       const fields = err.details && err.details.fields;
       if (err.code === 'validation_error' && fields && typeof fields === 'object') {
         setFieldErrors(fields);
-        const known = ['topic', 'additional_context', 'duration_minutes', 'discussion_depth'];
+        const known = ['topic', 'additional_context', 'duration_minutes', 'discussion_depth', 'discussion_mode', 'participants'];
         const unknown = Object.entries(fields).filter(([k]) => !known.includes(k));
         setFormError(unknown.length ? unknown.map(([, v]) => v).join(' ') : 'Please fix the highlighted fields.');
       } else {
@@ -154,28 +213,24 @@ export default function Home() {
           <div className="mb-5 inline-flex items-center gap-2 rounded-full border border-line bg-surface px-3 py-1 text-xs font-medium text-muted">
             <span className="h-1.5 w-1.5 rounded-full bg-alpha" />
             <span className="h-1.5 w-1.5 rounded-full bg-beta" />
-            Live AI-to-AI discussion
+            <span className="h-1.5 w-1.5 rounded-full bg-gamma" />
+            Live AI discussion, moderated
           </div>
           <h1 className="text-balance text-3xl font-bold leading-tight tracking-tight text-fg sm:text-5xl">
-            Watch two minds think out loud.{' '}
+            Watch AI minds think out loud.{' '}
             <span className="bg-gradient-to-r from-alpha to-beta bg-clip-text text-transparent">Then step in.</span>
           </h1>
           <p className="mx-auto mt-4 max-w-xl text-base leading-relaxed text-muted sm:text-lg">
-            Pick a question and let an analytical thinker and a philosophical thinker explore it together. Interrupt, pause or add your own voice whenever you like.
+            Pick a question, choose how many AIs take part and how each one thinks, and let them discuss it while Gamma keeps it fair. Interrupt, pause or add your own voice whenever you like.
           </p>
         </section>
 
         {!isLoggedIn && <GuestNote />}
         {isLoggedIn && (
           <p className="mx-auto mt-6 max-w-2xl text-center text-sm text-muted">
-            Hi <span className="font-semibold text-fg">{user.name}</span>, your discussions are saved to your account.
+            Hi <span className="font-semibold text-fg">{user.name}</span>, your discussions are saved to your account. They are private: other users and guests can never see them.
           </p>
         )}
-
-        <section className="mx-auto mt-8 grid max-w-2xl gap-3 sm:grid-cols-2">
-          <ThinkerCard who="alpha" />
-          <ThinkerCard who="beta" />
-        </section>
 
         <form onSubmit={submit} className="mx-auto mt-10 max-w-2xl space-y-7 rounded-3xl border border-line bg-surface/60 p-5 sm:p-7" noValidate>
           <div>
@@ -234,6 +289,51 @@ export default function Home() {
             />
             {!contextValid && <p className="mt-1.5 text-xs font-medium text-danger">Context must be {CONTEXT_MAX} characters or fewer.</p>}
             <FieldError message={fieldErrors.additional_context} />
+          </div>
+
+          <div>
+            <Label htmlFor="mode-group">Discussion mode</Label>
+            {!options && !optionsError && <SetupSkeleton />}
+            {options && (
+              <div id="mode-group">
+                <ModePicker
+                  modes={options.modes}
+                  value={mode}
+                  onChange={(m) => {
+                    setMode(m);
+                    clearError('discussion_mode');
+                  }}
+                  error={fieldErrors.discussion_mode}
+                />
+              </div>
+            )}
+          </div>
+
+          <div>
+            <Label htmlFor="participants">AI participants</Label>
+            {!options && !optionsError && <SetupSkeleton />}
+            {optionsError && (
+              <div className="rounded-xl border border-warn/30 bg-warn/10 px-3.5 py-3 text-sm text-fg" role="alert">
+                Could not load the personalities: {optionsError}{' '}
+                <button type="button" onClick={() => loadOptions()} className="font-semibold text-alpha hover:underline">
+                  Try again
+                </button>
+                <span className="mt-1 block text-xs text-muted">You can still start: Alpha (Analytical) and Beta (Philosophical) will discuss, with Gamma moderating.</span>
+              </div>
+            )}
+            {options && (
+              <div id="participants">
+                <ParticipantSetup
+                  options={options}
+                  seats={seats}
+                  onCountChange={changeCount}
+                  onPick={pickSeat}
+                  mode={mode}
+                  isLoggedIn={isLoggedIn}
+                  error={fieldErrors.participants}
+                />
+              </div>
+            )}
           </div>
 
           <div>
@@ -311,7 +411,7 @@ export default function Home() {
               id="depth-group"
               role="radiogroup"
               aria-label="Discussion depth"
-              className="grid gap-2.5 sm:grid-cols-3"
+              className="grid grid-cols-1 gap-2.5 sm:grid-cols-3"
               onKeyDown={(e) =>
                 radioKeyDown(e, DEPTH_VALUES, depth, (v) => {
                   setDepth(v);
